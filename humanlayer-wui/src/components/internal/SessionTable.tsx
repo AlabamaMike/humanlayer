@@ -21,6 +21,8 @@ import { HOTKEY_SCOPES } from '@/hooks/hotkeys/scopes'
 import { HotkeyScopeBoundary } from '../HotkeyScopeBoundary'
 import { SessionsEmptyState } from './SessionsEmptyState'
 import { ArchivedSessionsEmptyState } from './ArchivedSessionsEmptyState'
+import { useUndoManager } from '@/hooks/useUndoManager'
+import { UndoToast } from './UndoToast'
 
 interface SessionTableProps {
   sessions: Session[]
@@ -63,6 +65,7 @@ export default function SessionTable({
     bulkSelect,
     bulkDiscardDrafts,
   } = useStore()
+  const undoManager = useUndoManager()
 
   // Determine scope based on archived state
   const tableScope = isArchivedView ? HOTKEY_SCOPES.SESSIONS_ARCHIVED : HOTKEY_SCOPES.SESSIONS
@@ -333,17 +336,91 @@ export default function SessionTable({
             .filter(s => s?.status === SessionStatus.Draft)
             .map(s => s!.id)
 
-          if (draftIds.length > 0) {
-            setDraftsToDiscard(draftIds)
-            setDiscardDialogOpen(true)
+          if (draftIds.length === 0) {
+            return
           }
+
+          const count = draftIds.length
+
+          // Delete immediately (no confirmation modal)
+          await bulkDiscardDrafts(draftIds)
+
+          // Show undo toast
+          const toastIdValue = `undo:bulk-discard-${Date.now()}`
+          const toastId = toast(
+            <UndoToast
+              message={`${count} draft${count > 1 ? 's' : ''} deleted`}
+              toastId={toastIdValue}
+              onUndo={async () => {
+                await useStore.getState().bulkRestoreDrafts(draftIds)
+              }}
+              onDismiss={() => {
+                undoManager.removeByToastId(toastIdValue)
+              }}
+            />,
+            {
+              duration: 5000,
+              id: toastIdValue,
+            },
+          )
+
+          undoManager.addAction({
+            type: 'bulk_discard_draft',
+            toastId,
+            description: `${count} drafts deleted`,
+            undo: async () => {
+              await useStore.getState().bulkRestoreDrafts(draftIds)
+            },
+          })
         } else {
           // Single session discard
           const currentSession = sessions.find(s => s.id === focusedSession?.id)
-          if (currentSession && currentSession.status === SessionStatus.Draft) {
-            setDraftsToDiscard([currentSession.id])
-            setDiscardDialogOpen(true)
+          if (!currentSession || currentSession.status !== SessionStatus.Draft) {
+            return
           }
+
+          const sessionId = currentSession.id
+          const sessionTitle = currentSession.title || currentSession.summary || 'Untitled'
+
+          console.log('[UNDO-DEBUG] Deleting draft session:', {
+            sessionId,
+            sessionTitle,
+            status: currentSession.status
+          })
+
+          // Delete immediately (no confirmation modal)
+          await useStore.getState().removeSession(sessionId)
+          await daemonClient.deleteDraftSession(sessionId)
+
+          console.log('[UNDO-DEBUG] Draft deleted, creating undo toast')
+
+          // Show undo toast
+          const toastIdValue = `undo:discard-draft-${sessionId}-${Date.now()}`
+          const toastId = toast(
+            <UndoToast
+              message={`Draft "${sessionTitle}" deleted`}
+              toastId={toastIdValue}
+              onUndo={async () => {
+                await useStore.getState().restoreDraftSession(sessionId)
+              }}
+              onDismiss={() => {
+                undoManager.removeByToastId(toastIdValue)
+              }}
+            />,
+            {
+              duration: 5000,
+              id: toastIdValue,
+            },
+          )
+
+          undoManager.addAction({
+            type: 'discard_draft',
+            toastId,
+            description: `Draft "${sessionTitle}" deleted`,
+            undo: async () => {
+              await useStore.getState().restoreDraftSession(sessionId)
+            },
+          })
         }
       } catch (error) {
         toast.error('Failed to discard draft', {
@@ -418,21 +495,50 @@ export default function SessionTable({
           const nonSelectedSessions = sessions.filter(s => !selectedSessions.has(s.id))
           const nextFocusSession = nonSelectedSessions.length > 0 ? nonSelectedSessions[0] : null
 
-          await bulkArchiveSessions(Array.from(selectedSessions), isArchiving)
+          const sessionIds = Array.from(selectedSessions)
+          const count = sessionIds.length
+
+          await bulkArchiveSessions(sessionIds, isArchiving)
 
           // Focus next available session
           if (nextFocusSession && handleFocusSession) {
             handleFocusSession(nextFocusSession)
           }
 
-          toast.success(
-            isArchiving
-              ? `Archived ${selectedSessions.size} sessions`
-              : `Unarchived ${selectedSessions.size} sessions`,
-            {
+          // Show success notification with undo for archive (not unarchive)
+          if (isArchiving) {
+            const toastIdValue = `undo:bulk-archive-${Date.now()}`
+            const toastId = toast(
+              <UndoToast
+                message={`${count} session${count > 1 ? 's' : ''} archived`}
+                toastId={toastIdValue}
+                onUndo={async () => {
+                  await bulkArchiveSessions(sessionIds, false)
+                }}
+                onDismiss={() => {
+                  undoManager.removeByToastId(toastIdValue)
+                }}
+              />,
+              {
+                duration: 5000,
+                id: toastIdValue,
+              },
+            )
+
+            undoManager.addAction({
+              type: 'bulk_archive',
+              toastId,
+              description: `${count} sessions archived`,
+              undo: async () => {
+                await bulkArchiveSessions(sessionIds, false)
+              },
+            })
+          } else {
+            // Unarchive: just show simple success toast
+            toast.success(`Unarchived ${count} session${count > 1 ? 's' : ''}`, {
               duration: 3000,
-            },
-          )
+            })
+          }
         } else {
           // Single session archive
           const currentSession = sessions.find(s => s.id === focusedSession?.id)
@@ -461,19 +567,53 @@ export default function SessionTable({
 
           // Archive logic
           const isArchiving = !currentSession.archived
+          const sessionId = currentSession.id
+          const sessionSummary = currentSession.title || currentSession.summary || 'Untitled session'
 
-          await archiveSession(currentSession.id, isArchiving)
+          await archiveSession(sessionId, isArchiving)
 
           // Set focus to the determined session
           if (nextFocusSession && handleFocusSession) {
             handleFocusSession(nextFocusSession)
           }
 
-          // Show success notification
-          toast.success(isArchiving ? 'Session archived' : 'Session unarchived', {
-            description: currentSession.summary || 'Untitled session',
-            duration: 3000,
-          })
+          // Show success notification with undo for archive (not unarchive)
+          if (isArchiving) {
+            const toastIdValue = `undo:archive-${sessionId}-${Date.now()}`
+            const toastId = toast(
+              <UndoToast
+                message="Session archived"
+                title={sessionSummary}
+                toastId={toastIdValue}
+                onUndo={async () => {
+                  await archiveSession(sessionId, false)
+                }}
+                onDismiss={() => {
+                  undoManager.removeByToastId(toastIdValue)
+                }}
+              />,
+              {
+                duration: 5000,
+                id: toastIdValue,
+              },
+            )
+
+            // Register undo action
+            undoManager.addAction({
+              type: 'archive',
+              toastId,
+              description: 'Session archived',
+              undo: async () => {
+                await archiveSession(sessionId, false)
+              },
+            })
+          } else {
+            // Unarchive: just show simple success toast
+            toast.success('Session unarchived', {
+              description: sessionSummary,
+              duration: 3000,
+            })
+          }
         }
       } catch (error) {
         toast.error('Failed to archive session', {

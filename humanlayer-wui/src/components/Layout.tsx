@@ -45,6 +45,7 @@ import { TestErrorTrigger } from '@/components/TestErrorTrigger'
 import { CodeLayerToaster } from '@/components/internal/CodeLayerToaster'
 import { useDebugStore } from '@/stores/useDebugStore'
 import { HOTKEY_SCOPES } from '@/hooks/hotkeys/scopes'
+import { useUndoManager } from '@/hooks/useUndoManager'
 
 export function Layout() {
   const [approvals, setApprovals] = useState<any[]>([])
@@ -71,6 +72,9 @@ export function Layout() {
 
   // Debug store state
   const showDevUrl = useDebugStore(state => state.showDevUrl)
+
+  // Undo manager for undo functionality
+  const undoManager = useUndoManager()
 
   /*
     react-hotkeys-hook had some trouble doing adding this shortcut,
@@ -102,6 +106,12 @@ export function Layout() {
     return () => {
       windowStateService.destroy()
     }
+  }, [])
+
+  // Initialize undo manager cleanup
+  useEffect(() => {
+    undoManager.setupToastCleanup()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Secret hotkey for launch theme
@@ -233,6 +243,93 @@ export function Layout() {
     [navigate],
   )
 
+  // Global `z` hotkey for undo actions
+  useHotkeys(
+    'z',
+    async () => {
+      console.log('[UNDO-DEBUG] Z hotkey pressed')
+
+      // Don't trigger if focused on input
+      if (
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA'
+      ) {
+        return
+      }
+
+      // Get all visible toasts with undo actions
+      // @ts-ignore - getToasts might not be in type definitions
+      const visibleToasts = toast.getToasts ? toast.getToasts() : []
+      const undoToasts = visibleToasts.filter(t => typeof t.id === 'string' && t.id.startsWith('undo:'))
+
+      if (undoToasts.length === 0) {
+        // No undo toasts visible - silently return
+        return
+      }
+
+      try {
+        // Trigger the undo action that was encoded in the toast
+        // The toast's onUndo callback will be executed when we dismiss it
+        // But we need to manually call the undo function here
+
+        // Since the undo function is in the toast's action button,
+        // we can't access it directly. Instead, we'll rely on the
+        // toast system to handle the undo via the button click.
+        // For the hotkey, we need to extract the data and call the APIs directly.
+
+        // This is handled by clicking the undo button programmatically
+        // or by having the undo logic accessible via the undo manager
+
+        const mostRecentAction = undoManager.getMostRecentAction()
+
+        if (!mostRecentAction) {
+          // No action in undo manager - silently return
+          return
+        }
+
+        console.log('[UNDO-DEBUG] Executing undo for:', mostRecentAction.type, '-', mostRecentAction.description)
+
+        // Find the button for this toast and add visual feedback
+        const toastButtons = (window as any).__undoToastButtons || {}
+        const button = toastButtons[mostRecentAction.toastId] as HTMLButtonElement | undefined
+
+        if (button) {
+          // Add a class to simulate hover/active state
+          button.classList.add('bg-primary', 'text-primary-foreground')
+
+          // Remove the class after a short delay to create a flash effect
+          setTimeout(() => {
+            button.classList.remove('bg-primary', 'text-primary-foreground')
+          }, 200)
+        }
+
+        // Execute the undo function
+        await mostRecentAction.undo()
+
+        // Dismiss the original toast
+        toast.dismiss(mostRecentAction.toastId)
+
+        // Remove from undo manager
+        undoManager.removeAction(mostRecentAction.id)
+      } catch (error) {
+        console.error('[UNDO-DEBUG] Failed to undo action:', error)
+        console.error('[UNDO-DEBUG] Error details:', {
+          message: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        })
+        toast.error('Failed to undo action', {
+          description: error instanceof Error ? error.message : 'Unknown error',
+        })
+      }
+    },
+    {
+      scopes: [HOTKEY_SCOPES.ROOT],
+      preventDefault: true,
+      enableOnFormTags: false,
+    },
+    [undoManager],
+  )
+
   // Get store actions
   const updateSession = useStore(state => state.updateSession)
   const updateSessionStatus = useStore(state => state.updateSessionStatus)
@@ -330,8 +427,8 @@ export function Layout() {
 
           let notificationOptions: NotificationOptions = {
             type: 'session_completed',
-            title: `Session Completed (${data.session_id.slice(0, 8)})`,
-            body: `Completed: ${sessionText}`,
+            title: 'Session Completed',
+            body: sessionText,
             metadata: {
               sessionId: data.session_id,
               model: session.model,
@@ -342,8 +439,8 @@ export function Layout() {
 
           if (nextStatus === SessionStatus.Failed) {
             notificationOptions.type = 'session_failed'
-            notificationOptions.title = `Session Failed (${data.session_id.slice(0, 8)})`
-            notificationOptions.body = session.errorMessage || `Failed: ${sessionText}`
+            notificationOptions.title = 'Session Failed'
+            notificationOptions.body = session.errorMessage || sessionText
             notificationOptions.priority = 'high'
           }
 

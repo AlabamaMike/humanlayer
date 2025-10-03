@@ -25,6 +25,8 @@ import { DangerouslySkipPermissionsDialog } from './DangerouslySkipPermissionsDi
 import { AdditionalDirectoriesDropdown } from './components/AdditionalDirectoriesDropdown'
 import { DiscardDraftDialog } from './components/DiscardDraftDialog'
 import { SearchInput } from '@/components/FuzzySearchInput'
+import { useUndoManager } from '@/hooks/useUndoManager'
+import { UndoToast } from '../UndoToast'
 
 // Import hooks
 import { useSessionActions } from './hooks/useSessionActions'
@@ -206,6 +208,8 @@ function SessionDetail({ session, onClose }: SessionDetailProps) {
   const detailScope = session?.archived
     ? HOTKEY_SCOPES.SESSION_DETAIL_ARCHIVED
     : HOTKEY_SCOPES.SESSION_DETAIL
+
+  const undoManager = useUndoManager()
 
   const [isWideView, setIsWideView] = useState(false)
   const [expandedToolResult, setExpandedToolResult] = useState<ConversationEvent | null>(null)
@@ -706,19 +710,59 @@ function SessionDetail({ session, onClose }: SessionDetailProps) {
     [isDraft, session.id],
   )
 
-  // Handle discarding a draft session
-  const handleDiscardDraft = useCallback(() => {
-    // TODO(3): Implement hasChanges logic, for now we'll just say there are changes
-    const hasChanges = true
-    if (hasChanges) {
-      setShowDiscardDialog(true)
-    } else {
-      // No changes, just go back
-      onClose()
-    }
-  }, [responseEditor, onClose])
+  // Handle discarding a draft session (immediate deletion with undo)
+  const handleDiscardDraft = useCallback(async () => {
+    try {
+      const sessionId = session.id
+      const sessionTitle = session.title || session.summary || 'Untitled'
 
-  // Handle confirmed discard
+      // Delete immediately (no confirmation modal)
+      await daemonClient.deleteDraftSession(sessionId)
+
+      // Clear localStorage
+      localStorage.removeItem(`response-input.${sessionId}`)
+
+      // Refresh sessions to update counts
+      await useStore.getState().refreshSessions()
+
+      // Show undo toast
+      const toastIdValue = `undo:discard-draft-${sessionId}-${Date.now()}`
+      const toastId = toast(
+        <UndoToast
+          message={`Draft "${sessionTitle}" deleted`}
+          toastId={toastIdValue}
+          onUndo={async () => {
+            await useStore.getState().restoreDraftSession(sessionId)
+          }}
+          onDismiss={() => {
+            undoManager.removeByToastId(toastIdValue)
+          }}
+        />,
+        {
+          duration: 5000,
+          id: toastIdValue,
+        },
+      )
+
+      undoManager.addAction({
+        type: 'discard_draft',
+        toastId,
+        description: `Draft "${sessionTitle}" deleted`,
+        undo: async () => {
+          await useStore.getState().restoreDraftSession(sessionId)
+        },
+      })
+
+      // Navigate back to session list
+      onClose()
+    } catch (error) {
+      toast.error('Failed to delete draft', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+    }
+  }, [session.id, session.title, session.summary, onClose, undoManager])
+
+  // Handle confirmed discard (legacy - no longer used)
   const handleConfirmDiscard = useCallback(async () => {
     try {
       // Delete the draft session
@@ -1044,16 +1088,50 @@ function SessionDetail({ session, onClose }: SessionDetailProps) {
 
       // Either second press for active session or immediate archive for completed/failed
       try {
-        await useStore.getState().archiveSession(session.id, isArchiving)
+        const sessionId = session.id
+        const sessionSummary = session.title || session.summary || 'Untitled session'
+
+        await useStore.getState().archiveSession(sessionId, isArchiving)
 
         // Clear confirmation state
         setConfirmingArchive(false)
 
-        // Show success notification matching list view behavior
-        toast.success(isArchiving ? 'Session archived' : 'Session unarchived', {
-          description: session.summary || 'Untitled session',
-          duration: 3000,
-        })
+        // Show success notification with undo for archive (not unarchive)
+        if (isArchiving) {
+          const toastIdValue = `undo:archive-${sessionId}-${Date.now()}`
+          const toastId = toast(
+            <UndoToast
+              message="Session archived"
+              toastId={toastIdValue}
+              onUndo={async () => {
+                await useStore.getState().archiveSession(sessionId, false)
+              }}
+              onDismiss={() => {
+                undoManager.removeByToastId(toastIdValue)
+              }}
+            />,
+            {
+              description: sessionSummary,
+              duration: 5000,
+              id: toastIdValue,
+            },
+          )
+
+          undoManager.addAction({
+            type: 'archive',
+            toastId,
+            description: 'Session archived',
+            undo: async () => {
+              await useStore.getState().archiveSession(sessionId, false)
+            },
+          })
+        } else {
+          // Unarchive: just show simple success toast
+          toast.success('Session unarchived', {
+            description: sessionSummary,
+            duration: 3000,
+          })
+        }
 
         // Navigate back to session list
         onClose()
@@ -1123,16 +1201,50 @@ function SessionDetail({ session, onClose }: SessionDetailProps) {
 
     // Either second press for active session or immediate archive for completed/failed
     try {
-      await useStore.getState().archiveSession(session.id, isArchiving)
+      const sessionId = session.id
+      const sessionSummary = session.title || session.summary || 'Untitled session'
+
+      await useStore.getState().archiveSession(sessionId, isArchiving)
 
       // Clear confirmation state
       setConfirmingArchive(false)
 
-      // Show success notification matching list view behavior
-      toast.success(isArchiving ? 'Session archived' : 'Session unarchived', {
-        description: session.summary || 'Untitled session',
-        duration: 3000,
-      })
+      // Show success notification with undo for archive (not unarchive)
+      if (isArchiving) {
+        const toastIdValue = `undo:archive-${sessionId}-${Date.now()}`
+        const toastId = toast(
+          <UndoToast
+            message="Session archived"
+            toastId={toastIdValue}
+            onUndo={async () => {
+              await useStore.getState().archiveSession(sessionId, false)
+            }}
+            onDismiss={() => {
+              undoManager.removeByToastId(toastIdValue)
+            }}
+          />,
+          {
+            description: sessionSummary,
+            duration: 5000,
+            id: toastIdValue,
+          },
+        )
+
+        undoManager.addAction({
+          type: 'archive',
+          toastId,
+          description: 'Session archived',
+          undo: async () => {
+            await useStore.getState().archiveSession(sessionId, false)
+          },
+        })
+      } else {
+        // Unarchive: just show simple success toast
+        toast.success('Session unarchived', {
+          description: sessionSummary,
+          duration: 3000,
+        })
+      }
 
       // Navigate back to session list
       onClose()
@@ -1142,7 +1254,15 @@ function SessionDetail({ session, onClose }: SessionDetailProps) {
       })
       setConfirmingArchive(false)
     }
-  }, [session.id, session.archived, session.summary, session.status, onClose, confirmingArchive])
+  }, [
+    session.id,
+    session.archived,
+    session.summary,
+    session.status,
+    onClose,
+    confirmingArchive,
+    undoManager,
+  ])
 
   // Add Shift+G hotkey to scroll to bottom
   useHotkeys(

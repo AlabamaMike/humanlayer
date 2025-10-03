@@ -10,6 +10,7 @@ interface CodeLayerToastButtonsProps {
   action?: ToastAction
   cancel?: ToastAction
   variant?: 'default' | 'success' | 'error' | 'warning' | 'info'
+  actionRef?: React.Ref<HTMLButtonElement>
 }
 
 /**
@@ -22,6 +23,7 @@ export function CodeLayerToastButtons({
   action,
   cancel,
   variant = 'default',
+  actionRef,
 }: CodeLayerToastButtonsProps) {
   const handleCancel = (e: React.MouseEvent<HTMLButtonElement>) => {
     cancel?.onClick?.(e)
@@ -93,6 +95,7 @@ export function CodeLayerToastButtons({
       )}
       {action && (
         <Button
+          ref={actionRef}
           data-button
           data-action
           onClick={handleAction}
