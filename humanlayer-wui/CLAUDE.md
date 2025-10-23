@@ -59,3 +59,49 @@ Selection behavior is managed through the AppStore with these key methods:
 - `updateCurrentRange()` - Modifies existing ranges (pivot behavior)
 
 The selection system uses "stateless anchor management" - anchors are calculated dynamically based on the current position within a selection range, not stored in state. This prevents synchronization issues.
+
+## Skills System
+
+CodeLayer integrates a comprehensive skills library adapted from [obra/superpowers](https://github.com/obra/superpowers). Skills provide structured workflows for development, debugging, and collaboration.
+
+### Available Skills
+
+**Testing:**
+- `test-driven-development` - RED-GREEN-REFACTOR cycle with bun test
+  - Use: Always when implementing features or fixing bugs
+  - Slash command: `/tdd`
+
+**Debugging:**
+- `systematic-debugging` - Four-phase debugging framework
+  - Use: When encountering bugs or unexpected behavior
+  - Slash command: `/debug`
+- `verification-before-completion` - Evidence-based completion verification
+  - Use: Automatically before claiming work complete
+
+**Collaboration:**
+- `brainstorming` - Design refinement through structured questioning
+  - Use: When designing new features
+  - Slash command: `/brainstorm`
+- `writing-plans` - Detailed implementation plans with exact file paths
+  - Use: When design is complete
+  - Slash command: `/write-plan`
+- `executing-plans` - Batch execution with review checkpoints
+  - Use: When executing implementation plans
+  - Slash command: `/execute-plan`
+
+### Quick Verification
+
+Before any commit:
+```bash
+cd humanlayer-wui
+bun run check && bun test  # Must pass
+```
+
+### Typical Workflow
+
+1. **Design**: `/brainstorm` → Create design in `docs/plans/`
+2. **Plan**: `/write-plan` → Detailed task breakdown
+3. **Implement**: `/execute-plan` → Execute in batches with TDD
+4. **Verify**: `bun run check && bun test` before commit
+
+See [SKILLS.md](SKILLS.md) for comprehensive documentation.
