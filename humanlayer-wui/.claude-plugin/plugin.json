@@ -1,0 +1,13 @@
+{
+  "name": "codelayer-skills",
+  "description": "Development skills for CodeLayer: TDD, debugging, collaboration patterns optimized for Tauri + React development",
+  "version": "1.0.0",
+  "author": {
+    "name": "HumanLayer Team",
+    "email": "support@humanlayer.dev"
+  },
+  "homepage": "https://github.com/humanlayer/humanlayer",
+  "repository": "https://github.com/humanlayer/humanlayer",
+  "license": "MIT",
+  "keywords": ["skills", "tdd", "debugging", "collaboration", "react", "tauri", "codelayer"]
+}
